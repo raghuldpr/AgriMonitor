@@ -1,42 +1,39 @@
 /**
- * AgriMonitor BLE Manager
- * Central Bluetooth Low Energy manager for ESP32 agriculture telemetry.
- * Adapted from Healthiva BLE state machine with React Native Android BLE compatibility.
+ * AgriMonitor BLE Manager (Phase 1)
+ *
+ * Central service controlling device scanning, GATT connection,
+ * reconnection lifecycle, characteristic notification subscription,
+ * and telemetry stream dispatching.
  */
 
 import {
-  AGRIMONITOR_BLE_CONFIG,
+  BLE_CONFIG,
   AGRIMONITOR_SERVICE_UUID,
   AGRIMONITOR_DATA_CHAR_UUID,
-  AGRIMONITOR_CONTROL_CHAR_UUID,
 } from './bleConfig';
 import { SensorParser } from './SensorParser';
-import { requestAndroidBlePermissions } from './blePermissions';
+import { BlePermissionsService } from './blePermissions';
 import {
-  AgricultureSensorData,
+  AgricultureTelemetry,
   BleConnectionStatus,
-  BleDeviceDescriptor,
+  DiscoveredBleDevice,
+  DeviceStatus,
 } from '../../types/telemetry';
 
-export type SensorDataCallback = (data: AgricultureSensorData) => void;
-export type ConnectionStateCallback = (
-  status: BleConnectionStatus,
-  deviceName: string | null,
-  lastReceivedTime: string | null,
-  error?: string
-) => void;
+export type TelemetryListener = (telemetry: AgricultureTelemetry) => void;
+export type StatusListener = (status: BleConnectionStatus, error?: string) => void;
+export type DeviceListListener = (devices: DiscoveredBleDevice[]) => void;
 
-// Safe Base64 decode helper for React Native
-function decodeBase64(base64: string): string {
+// Safe Base64 decoder
+function decodeBase64(base64Str: string): string {
   try {
     if (typeof atob === 'function') {
-      return atob(base64);
+      return atob(base64Str);
     }
-    // Simple polyfill fallback
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
     let str = '';
     let i = 0;
-    const clean = base64.replace(/[^A-Za-z0-9\+\/\=]/g, '');
+    const clean = base64Str.replace(/[^A-Za-z0-9\+\/\=]/g, '');
     while (i < clean.length) {
       const enc1 = chars.indexOf(clean.charAt(i++));
       const enc2 = chars.indexOf(clean.charAt(i++));
@@ -50,7 +47,7 @@ function decodeBase64(base64: string): string {
       if (enc4 !== 64 && chr3 !== 0) str += String.fromCharCode(chr3);
     }
     return str;
-  } catch (e) {
+  } catch {
     return '';
   }
 }
@@ -58,35 +55,26 @@ function decodeBase64(base64: string): string {
 export class BleManager {
   private static instance: BleManager | null = null;
 
-  private blePlxManager: any = null;
+  private blePlxClient: any = null;
   private connectedDevice: any = null;
-  private activeSubscription: any = null;
+  private dataSubscription: any = null;
 
   private connectionStatus: BleConnectionStatus = 'DISCONNECTED';
-  private connectedDeviceName: string | null = null;
-  private lastReceivedTimestamp: string | null = null;
+  private discoveredDevices: Map<string, DiscoveredBleDevice> = new Map();
   private reconnectAttempts = 0;
   private isUserInitiatedDisconnect = false;
-  private currentManualPh = 6.5;
+  private scanTimeoutTimer: any = null;
+  private simulationTimer: any = null;
 
-  private sensorDataListeners: Set<SensorDataCallback> = new Set();
-  private connectionStateListeners: Set<ConnectionStateCallback> = new Set();
+  private latestTelemetry: AgricultureTelemetry | null = null;
+  private deviceStatus: DeviceStatus = { connected: false };
 
-  private simulationInterval: any = null;
-
-  // Last known sensor readings
-  private lastData: AgricultureSensorData = {
-    temperature: 26.5,
-    humidity: 60.0,
-    soilMoisture: 45.0,
-    tds: 520,
-    ph: 6.5,
-    battery: 90,
-    timestamp: new Date().toISOString(),
-  };
+  private telemetryListeners: Set<TelemetryListener> = new Set();
+  private statusListeners: Set<StatusListener> = new Set();
+  private deviceListListeners: Set<DeviceListListener> = new Set();
 
   private constructor() {
-    this.initBleClient();
+    this.initNativeClient();
   }
 
   public static getInstance(): BleManager {
@@ -96,182 +84,232 @@ export class BleManager {
     return BleManager.instance;
   }
 
-  private initBleClient() {
+  private initNativeClient() {
     try {
-      // Lazy load react-native-ble-plx if available in native runtime
       const { BleManager: BlePlx } = require('react-native-ble-plx');
-      this.blePlxManager = new BlePlx();
-    } catch (e) {
-      console.log('[BleManager] Native BLE module not found or running in web/Expo Go mode. Simulation ready.');
+      this.blePlxClient = new BlePlx();
+    } catch {
+      console.log('[BleManager] Native BLE module unavailable in current environment. Using simulation mode fallback.');
     }
   }
 
-  public setManualPh(ph: number) {
-    this.currentManualPh = ph;
-    this.lastData.ph = ph;
-  }
-
-  public getManualPh(): number {
-    return this.currentManualPh;
-  }
-
+  // --- STATE ACCESSORS ---
   public getConnectionStatus(): BleConnectionStatus {
     return this.connectionStatus;
   }
 
-  public getLastData(): AgricultureSensorData {
-    return this.lastData;
+  public getDeviceStatus(): DeviceStatus {
+    return this.deviceStatus;
   }
 
-  public getConnectedDeviceName(): string | null {
-    return this.connectedDeviceName;
+  public getLatestTelemetry(): AgricultureTelemetry | null {
+    return this.latestTelemetry;
   }
 
-  public subscribeSensorData(cb: SensorDataCallback): () => void {
-    this.sensorDataListeners.add(cb);
-    return () => this.sensorDataListeners.delete(cb);
+  public getDiscoveredDevices(): DiscoveredBleDevice[] {
+    return Array.from(this.discoveredDevices.values());
   }
 
-  public subscribeConnectionState(cb: ConnectionStateCallback): () => void {
-    this.connectionStateListeners.add(cb);
-    cb(this.connectionStatus, this.connectedDeviceName, this.lastReceivedTimestamp);
-    return () => this.connectionStateListeners.delete(cb);
+  // --- SUBSCRIPTION REGISTRATION ---
+  public subscribeTelemetry(listener: TelemetryListener): () => void {
+    this.telemetryListeners.add(listener);
+    if (this.latestTelemetry) {
+      listener(this.latestTelemetry);
+    }
+    return () => this.telemetryListeners.delete(listener);
   }
 
-  private notifyConnectionState(status: BleConnectionStatus, name: string | null, error?: string) {
+  public subscribeStatus(listener: StatusListener): () => void {
+    this.statusListeners.add(listener);
+    listener(this.connectionStatus);
+    return () => this.statusListeners.delete(listener);
+  }
+
+  public subscribeDiscoveredDevices(listener: DeviceListListener): () => void {
+    this.deviceListListeners.add(listener);
+    listener(this.getDiscoveredDevices());
+    return () => this.deviceListListeners.delete(listener);
+  }
+
+  private updateStatus(status: BleConnectionStatus, error?: string) {
     this.connectionStatus = status;
-    this.connectedDeviceName = name;
-    this.connectionStateListeners.forEach((cb) =>
-      cb(status, name, this.lastReceivedTimestamp, error)
-    );
+    this.deviceStatus.connected = status === 'CONNECTED';
+    this.statusListeners.forEach((fn) => fn(status, error));
   }
 
-  private notifySensorData(data: AgricultureSensorData) {
-    this.lastData = data;
-    this.lastReceivedTimestamp = data.timestamp;
-    this.sensorDataListeners.forEach((cb) => cb(data));
-    this.connectionStateListeners.forEach((cb) =>
-      cb(this.connectionStatus, this.connectedDeviceName, this.lastReceivedTimestamp)
-    );
+  private notifyTelemetry(telemetry: AgricultureTelemetry) {
+    this.latestTelemetry = telemetry;
+    this.deviceStatus.lastSeen = telemetry.timestamp;
+    this.telemetryListeners.forEach((fn) => fn(telemetry));
   }
 
-  /**
-   * Scan and Connect to AgriMonitor ESP32 Hardware
-   */
-  public async connect(targetDeviceId?: string): Promise<boolean> {
-    const hasPermissions = await requestAndroidBlePermissions();
-    if (!hasPermissions) {
-      this.notifyConnectionState('ERROR', null, 'Required Bluetooth and Location permissions were denied.');
+  private notifyDiscoveredDevices() {
+    const list = this.getDiscoveredDevices();
+    this.deviceListListeners.forEach((fn) => fn(list));
+  }
+
+  // --- SCANNING ---
+  public async startScan(): Promise<boolean> {
+    const perm = await BlePermissionsService.requestPermissions();
+    if (!perm.granted) {
+      this.updateStatus('ERROR', perm.message || 'Bluetooth permissions denied');
       return false;
     }
 
-    this.isUserInitiatedDisconnect = false;
-    this.notifyConnectionState('CONNECTING', this.connectedDeviceName || AGRIMONITOR_BLE_CONFIG.DEFAULT_DEVICE_NAME);
+    if (this.connectionStatus === 'SCANNING') {
+      return true;
+    }
 
-    // If native BleManager is available, scan & connect
-    if (this.blePlxManager) {
+    this.discoveredDevices.clear();
+    this.notifyDiscoveredDevices();
+    this.updateStatus('SCANNING');
+
+    if (this.blePlxClient) {
       try {
-        if (targetDeviceId) {
-          return await this.connectToDeviceId(targetDeviceId);
-        }
+        if (this.scanTimeoutTimer) clearTimeout(this.scanTimeoutTimer);
 
-        return await new Promise<boolean>((resolve) => {
-          let timeoutTimer: any = null;
+        this.scanTimeoutTimer = setTimeout(() => {
+          this.stopScan();
+        }, BLE_CONFIG.SCAN_TIMEOUT_MS);
 
-          const finish = (success: boolean) => {
-            if (timeoutTimer) clearTimeout(timeoutTimer);
-            this.blePlxManager.stopDeviceScan();
-            resolve(success);
-          };
-
-          timeoutTimer = setTimeout(() => {
-            console.warn('[BleManager] Scan timed out without discovering device.');
-            this.notifyConnectionState('ERROR', null, 'ESP32 device not found. Ensure device is powered on.');
-            finish(false);
-          }, AGRIMONITOR_BLE_CONFIG.SCAN_TIMEOUT_MS);
-
-          this.blePlxManager.startDeviceScan(
-            [AGRIMONITOR_SERVICE_UUID],
-            null,
-            async (error: any, device: any) => {
-              if (error) {
-                console.error('[BleManager] Scan error:', error);
-                this.notifyConnectionState('ERROR', null, error.message);
-                finish(false);
-                return;
-              }
-
-              if (device && (device.name?.includes('AgriMonitor') || device.name?.includes('ESP32'))) {
-                this.blePlxManager.stopDeviceScan();
-                if (timeoutTimer) clearTimeout(timeoutTimer);
-                const connected = await this.connectToDeviceId(device.id, device.name);
-                resolve(connected);
-              }
+        this.blePlxClient.startDeviceScan(
+          null, // Scan for all BLE peripherals, filtering by name/service UUID
+          { allowDuplicates: false },
+          (error: any, device: any) => {
+            if (error) {
+              console.warn('[BleManager] Scan error:', error);
+              this.stopScan();
+              this.updateStatus('ERROR', error.message);
+              return;
             }
-          );
-        });
+
+            if (device && device.id) {
+              const name = device.name || device.localName || null;
+              this.discoveredDevices.set(device.id, {
+                id: device.id,
+                name: name,
+                rssi: device.rssi,
+              });
+              this.notifyDiscoveredDevices();
+            }
+          }
+        );
+        return true;
       } catch (err: any) {
-        console.error('[BleManager] Connection failure:', err);
-        this.notifyConnectionState('ERROR', null, err.message || 'Connection failed');
+        this.updateStatus('ERROR', err.message);
         return false;
       }
     } else {
-      // Simulation mode fallback
-      this.startSimulatedTelemetry();
-      this.notifyConnectionState('CONNECTED', 'AgriMonitor Simulated ESP32');
+      // Simulated scan for development environment
+      setTimeout(() => {
+        this.discoveredDevices.set('SIM-AGRI-001', {
+          id: 'SIM-AGRI-001',
+          name: 'AgriMonitor-ESP32 (Simulated)',
+          rssi: -65,
+        });
+        this.notifyDiscoveredDevices();
+        this.stopScan();
+      }, 1500);
       return true;
     }
   }
 
-  private async connectToDeviceId(deviceId: string, deviceName?: string): Promise<boolean> {
+  public stopScan() {
+    if (this.scanTimeoutTimer) {
+      clearTimeout(this.scanTimeoutTimer);
+      this.scanTimeoutTimer = null;
+    }
+
+    if (this.blePlxClient) {
+      try {
+        this.blePlxClient.stopDeviceScan();
+      } catch (e) {
+        console.warn('[BleManager] Error stopping device scan:', e);
+      }
+    }
+
+    if (this.connectionStatus === 'SCANNING') {
+      this.updateStatus('DISCONNECTED');
+    }
+  }
+
+  // --- CONNECTION ---
+  public async connect(deviceId: string): Promise<boolean> {
+    this.stopScan();
+    this.isUserInitiatedDisconnect = false;
+    this.updateStatus('CONNECTING');
+
+    if (deviceId.startsWith('SIM-') || !this.blePlxClient) {
+      // Simulated connection for testing and verification
+      this.deviceStatus = {
+        connected: true,
+        deviceId: deviceId,
+        deviceName: 'AgriMonitor-ESP32 (Simulated)',
+        lastSeen: Date.now(),
+      };
+      this.startSimulationStream();
+      this.updateStatus('CONNECTED');
+      return true;
+    }
+
     try {
-      const device = await this.blePlxManager.connectToDevice(deviceId, { autoConnect: true });
-      this.connectedDevice = device;
-      this.connectedDeviceName = deviceName || device.name || AGRIMONITOR_BLE_CONFIG.DEFAULT_DEVICE_NAME;
-
-      await device.discoverAllServicesAndCharacteristics();
-
-      // Monitor disconnected event
-      device.onDisconnected((error: any, disconnectedDevice: any) => {
-        this.handleDisconnected(error);
+      const device = await this.blePlxClient.connectToDevice(deviceId, {
+        autoConnect: false,
+        timeout: BLE_CONFIG.CONNECT_TIMEOUT_MS,
       });
 
-      // Subscribe to DATA characteristic notifications
-      this.activeSubscription = device.monitorCharacteristicForService(
+      this.connectedDevice = device;
+      this.deviceStatus = {
+        connected: true,
+        deviceId: device.id,
+        deviceName: device.name || BLE_CONFIG.DEFAULT_DEVICE_NAME,
+        lastSeen: Date.now(),
+      };
+
+      // Disconnect listener
+      device.onDisconnected((error: any) => {
+        this.handleDisconnected(deviceId, error);
+      });
+
+      // Discover GATT Services & Characteristics
+      await device.discoverAllServicesAndCharacteristics();
+
+      // Subscribe to telemetry notification characteristic
+      this.dataSubscription = device.monitorCharacteristicForService(
         AGRIMONITOR_SERVICE_UUID,
         AGRIMONITOR_DATA_CHAR_UUID,
         (error: any, characteristic: any) => {
           if (error) {
-            console.warn('[BleManager] Characteristic monitor error:', error);
+            console.warn('[BleManager] Characteristic notify error:', error);
             return;
           }
           if (characteristic?.value) {
-            const rawString = decodeBase64(characteristic.value);
-            const parsed = SensorParser.parseJsonPayload(rawString, this.currentManualPh);
-            if (parsed) {
-              this.notifySensorData(parsed);
+            const rawJson = decodeBase64(characteristic.value);
+            const telemetry = SensorParser.parseJsonPayload(rawJson);
+            if (telemetry) {
+              this.notifyTelemetry(telemetry);
             }
           }
         }
       );
 
       this.reconnectAttempts = 0;
-      this.notifyConnectionState('CONNECTED', this.connectedDeviceName);
+      this.updateStatus('CONNECTED');
       return true;
-    } catch (e: any) {
-      console.error('[BleManager] Device connection error:', e);
-      this.notifyConnectionState('ERROR', null, e.message);
+    } catch (err: any) {
+      console.error('[BleManager] Connection failed:', err);
+      this.updateStatus('ERROR', err?.message || 'Failed to connect to device');
       return false;
     }
   }
 
   public async disconnect(): Promise<void> {
     this.isUserInitiatedDisconnect = true;
-    this.stopSimulatedTelemetry();
+    this.stopSimulationStream();
 
-    if (this.activeSubscription) {
-      this.activeSubscription.remove();
-      this.activeSubscription = null;
+    if (this.dataSubscription) {
+      this.dataSubscription.remove();
+      this.dataSubscription = null;
     }
 
     if (this.connectedDevice) {
@@ -283,71 +321,72 @@ export class BleManager {
       this.connectedDevice = null;
     }
 
-    this.notifyConnectionState('DISCONNECTED', null);
+    this.deviceStatus.connected = false;
+    this.updateStatus('DISCONNECTED');
   }
 
-  private handleDisconnected(error?: any) {
+  // --- RECONNECTION STRATEGY ---
+  private handleDisconnected(deviceId: string, error?: any) {
     this.connectedDevice = null;
-    this.activeSubscription = null;
+    this.dataSubscription = null;
+    this.deviceStatus.connected = false;
 
-    if (!this.isUserInitiatedDisconnect && this.reconnectAttempts < AGRIMONITOR_BLE_CONFIG.RECONNECT_ATTEMPTS) {
+    if (!this.isUserInitiatedDisconnect && this.reconnectAttempts < BLE_CONFIG.MAX_RECONNECT_ATTEMPTS) {
       this.reconnectAttempts++;
-      this.notifyConnectionState('RECONNECTING', this.connectedDeviceName);
+      this.updateStatus(
+        'RECONNECTING',
+        `Connection lost. Reconnecting attempt ${this.reconnectAttempts} of ${BLE_CONFIG.MAX_RECONNECT_ATTEMPTS}...`
+      );
+
       setTimeout(() => {
         if (this.connectionStatus === 'RECONNECTING') {
-          this.connect();
+          this.connect(deviceId);
         }
-      }, AGRIMONITOR_BLE_CONFIG.RECONNECT_INTERVAL_MS);
+      }, BLE_CONFIG.RECONNECT_INTERVAL_MS);
     } else {
-      this.notifyConnectionState('DISCONNECTED', null, error?.message);
+      this.reconnectAttempts = 0;
+      this.updateStatus('DISCONNECTED', error?.message || 'Device disconnected');
     }
   }
 
-  /**
-   * Simulated Telemetry for testing and verification without physical ESP32
-   */
-  public startSimulatedTelemetry() {
-    this.stopSimulatedTelemetry();
-    this.notifyConnectionState('CONNECTED', 'AgriMonitor ESP32 (Simulation)');
+  // --- DEVELOPMENT TEST / SIMULATION UTILITIES ---
+  public startSimulationStream() {
+    this.stopSimulationStream();
+    this.simulationTimer = setInterval(() => {
+      // Natural oscillating readings
+      const baseTemp = 28.5 + Math.sin(Date.now() / 10000) * 2.0;
+      const baseHum = 65.0 + Math.cos(Date.now() / 8000) * 5.0;
+      const baseSoil = 45.0 + Math.sin(Date.now() / 15000) * 4.0;
+      const baseTds = 580 + Math.round(Math.cos(Date.now() / 12000) * 30);
 
-    this.simulationInterval = setInterval(() => {
-      // Natural sensor jitter
-      const t = Number((25.0 + Math.sin(Date.now() / 15000) * 3.5).toFixed(1));
-      const h = Number((62.0 + Math.cos(Date.now() / 12000) * 8.0).toFixed(1));
-      const sm = Number((42.0 + Math.sin(Date.now() / 20000) * 6.0).toFixed(1));
-      const tds = Math.round(520 + Math.cos(Date.now() / 18000) * 45);
-
-      const packet: AgricultureSensorData = {
-        temperature: t,
-        humidity: h,
-        soilMoisture: sm,
-        tds: tds,
-        ph: this.currentManualPh,
-        battery: 88,
-        timestamp: new Date().toISOString(),
+      const packet = {
+        temperature: Number(baseTemp.toFixed(1)),
+        humidity: Number(baseHum.toFixed(1)),
+        soilMoisture: Number(baseSoil.toFixed(1)),
+        tds: baseTds,
       };
 
-      this.notifySensorData(packet);
-    }, 2500);
+      const json = JSON.stringify(packet);
+      const parsed = SensorParser.parseJsonPayload(json);
+      if (parsed) {
+        this.notifyTelemetry(parsed);
+      }
+    }, 2000);
   }
 
-  public stopSimulatedTelemetry() {
-    if (this.simulationInterval) {
-      clearInterval(this.simulationInterval);
-      this.simulationInterval = null;
+  public stopSimulationStream() {
+    if (this.simulationTimer) {
+      clearInterval(this.simulationTimer);
+      this.simulationTimer = null;
     }
   }
 
-  public injectTestData(data: Partial<AgricultureSensorData>) {
-    const packet: AgricultureSensorData = {
-      temperature: data.temperature ?? this.lastData.temperature,
-      humidity: data.humidity ?? this.lastData.humidity,
-      soilMoisture: data.soilMoisture ?? this.lastData.soilMoisture,
-      tds: data.tds ?? this.lastData.tds,
-      ph: data.ph ?? this.currentManualPh,
-      battery: data.battery ?? this.lastData.battery,
-      timestamp: new Date().toISOString(),
-    };
-    this.notifySensorData(packet);
+  public injectRawPacket(rawPayload: string): boolean {
+    const parsed = SensorParser.parseJsonPayload(rawPayload);
+    if (parsed) {
+      this.notifyTelemetry(parsed);
+      return true;
+    }
+    return false;
   }
 }
