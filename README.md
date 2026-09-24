@@ -1,10 +1,10 @@
 # AgriMonitor
 
-**AgriMonitor** is an Android-only IoT agricultural monitoring platform connected to an **ESP32** microcontroller over Bluetooth Low Energy (BLE), featuring real-time sensor telemetry, a deterministic agriculture rule engine, fertilizer requirement estimation, and an AI Agriculture Assistant powered by Groq open-source LLMs via an Express backend proxy.
+**AgriMonitor** is an Android-only IoT agricultural monitoring platform connected to an **ESP32** microcontroller over Bluetooth Low Energy (BLE), featuring real-time sensor telemetry, a deterministic agriculture rule engine, fertilizer requirement estimation, an AI Agriculture Assistant powered by Groq open-source LLMs via an Express backend proxy, and a Nearby Agricultural Services Finder powered by OpenStreetMap and Overpass API.
 
 ---
 
-## 1. System Architecture (Phase 1–5)
+## 1. System Architecture (Phase 1–6)
 
 ```text
 [ ESP32 Hardware: DHT11 + Soil Moisture + TDS ]
@@ -18,14 +18,14 @@
                        ▼
               [ useTelemetry ] ──► (State & Local Persistence)
                        │
-         ┌─────────────┼─────────────────────────────┐
-         ▼             ▼                             ▼
-  [ Rule Engine ]  [ Fertilizer Calculator ]  [ AI Chatbot UI ]
-  (Alerts/Insight) (Deterministic Bags)       (Offline & Online)
-         │             │                             │
-         └─────────────┼─────────────────────────────┤
-                       ▼                             │
-            [ Android Mobile UI ]                    │
+         ┌─────────────┼─────────────────────────────┬───────────────────────────┐
+         ▼             ▼                             ▼                           ▼
+  [ Rule Engine ]  [ Fertilizer Calculator ]  [ AI Chatbot UI ]           [ Nearby Services ]
+  (Alerts/Insight) (Deterministic Bags)       (Offline & Online)          (OSM Overpass POIs)
+         │             │                             │                           │
+         └─────────────┼─────────────────────────────┤                           │
+                       ▼                             │                           ▼
+            [ Android Mobile UI ]                    │                   [ Device GPS / OSM ]
                                                      ▼ POST /api/chat
                                         ┌───────────────────────────────┐
                                         │ Express AI Proxy Backend      │
@@ -40,7 +40,34 @@
 
 ---
 
-## 2. Phase 5: AI Agriculture Assistant & Express Proxy
+## 2. Phase 6: Nearby Agricultural Services Finder
+
+### A. Architecture & OpenStreetMap Integration
+* **Data Provider:** OpenStreetMap (OSM) via public Overpass API endpoints (`https://overpass-api.de/api/interpreter`).
+* **No Database / No Auth:** Operates completely local-first and in-memory without Supabase, Firebase, SQLite, or backend user accounts.
+* **Privacy by Design:** Device GPS coordinates are used purely in real time to perform nearby bounding queries and are never logged, uploaded, or persisted.
+
+### B. Supported Search Categories:
+1. **🌱 All:** Combined agricultural POI search.
+2. **🧪 Fertilizer:** Fertilizer retail shops and agricultural chemical suppliers (`shop=fertilizer`, `fertilizer=yes`).
+3. **🌾 Seeds:** Certified seed stores and distributors (`shop=seeds`, `seeds=yes`).
+4. **🚜 Agri Supplies:** Farm machinery, garden centres, and agricultural supply depots (`shop=agrarian`, `shop=farm`, `shop=garden_centre`).
+5. **🏢 Agri Centers:** Agricultural markets, mandis, and storage warehouses (`amenity=marketplace`, `amenity=warehouse`, `building=agricultural`).
+6. **🏛 Government Offices:** Krishi Bhavans, Raitha Samparka Kendras, and Department of Agriculture extension offices (`office=government`, `government=agriculture`).
+
+### C. Search Radius & Geodesic Distance
+* **Radius Options:** `2 km`, `5 km` (default), and `10 km`.
+* **Haversine Distance Engine:** Calculates exact great-circle distance locally (`src/lib/distance.ts`) and sorts results ascending by proximity (nearest first).
+* **Directions & Deep Linking:** Tapping **Directions** opens the native maps application (`geo:lat,lon` with fallback to Google Maps search). Tapping **Call** initiates a direct phone dialer intent when phone tags exist.
+
+### D. Map Attribution & Notice
+* **Attribution:** The map visualizer and place cards prominently display `© OpenStreetMap contributors`.
+* **Coverage Notice:**
+  > **Nearby locations are based on OpenStreetMap data. Coverage and accuracy may vary by location. The application does not guarantee that every agricultural shop or government center in the area is listed.**
+
+---
+
+## 3. Phase 5: AI Agriculture Assistant & Express Proxy
 
 ### A. Provider Isolation & Architecture
 * **Frontend-Backend Decoupling:** The mobile app only communicates with `POST /api/chat`. It does not know which LLM provider or model is used.
@@ -66,12 +93,12 @@ AGRONOMIC CONTEXT GUIDELINES:
 ```
 
 ### C. Agronomic Safety & Rule Engine Independence
-* **No AI Override:** The deterministic rule engine (`agricultureRules.ts`) remains the sole authority for sensor status, thresholds, and alert generation. The AI assistant only provides explanations, educational context, and conversational guidance.
+* **No AI Override:** The deterministic rule engine (`agricultureRules.ts`) remains the sole authority for sensor status, thresholds, and alert generation.
 * **TDS vs NPK Mandate:** The AI is strictly instructed that TDS measures total dissolved mineral salts/electrical conductivity and **never** directly assays isolated Nitrogen, Phosphorus, or Potassium concentrations.
 * **Fertilizer Calculator Independence:** The chatbot explains concepts and directs users to the dedicated Fertilizer Calculator rather than calculating unverified field bag requirements.
 
 ### D. Offline Common-Questions Matcher
-Standard agricultural and sensor queries are answered instantly on-device without network latency or backend API calls:
+Standard agricultural queries are answered instantly on-device without network latency:
 * *What is TDS? / What does TDS mean?*
 * *What is soil moisture?*
 * *What does DHT11 measure?*
@@ -80,13 +107,12 @@ Standard agricultural and sensor queries are answered instantly on-device withou
 * *How does temperature affect crops?*
 
 ### E. Local Storage Isolation
-* Chat history is stored locally in AsyncStorage under `@agrimonitor_chat_history`.
-* Capped at the latest **100 messages** (newest preserved).
+* Chat history is stored locally in AsyncStorage under `@agrimonitor_chat_history` (capped at **100 messages**).
 * Clearing chat history does **not** wipe alerts, telemetry cache, or fertilizer logs.
 
 ---
 
-## 3. Backend Setup & Configuration
+## 4. Backend Setup & Configuration
 
 ### A. Environment Variables
 Copy `.env.example` to `server/.env`:
@@ -94,7 +120,7 @@ Copy `.env.example` to `server/.env`:
 cp .env.example server/.env
 ```
 
-Configure the following variables in `server/.env`:
+Configure `server/.env`:
 ```env
 GROQ_API_KEY=your_actual_groq_api_key_here
 GROQ_MODEL=llama-3.3-70b-versatile
@@ -110,18 +136,10 @@ Verify backend health:
 ```bash
 curl http://localhost:3001/health
 ```
-Response:
-```json
-{
-  "status": "ok",
-  "aiConfigured": true,
-  "provider": "Groq"
-}
-```
 
 ---
 
-## 4. Mobile API Configuration & LAN Setup
+## 5. Mobile API Configuration & LAN Setup
 
 Mobile endpoint configurations are centralized in `src/config/api.ts`:
 * **Android Emulator:** Uses `http://10.0.2.2:3001` automatically.
@@ -129,7 +147,7 @@ Mobile endpoint configurations are centralized in `src/config/api.ts`:
 
 ---
 
-## 5. Fertilizer Calculator Specifications (Phase 4)
+## 6. Fertilizer Calculator Specifications (Phase 4)
 
 ### Mathematical Formulations:
 1. $\text{Total Required (kg)} = \text{Land Area (acres)} \times \text{Application Rate (kg/acre)}$
@@ -143,7 +161,7 @@ Mobile endpoint configurations are centralized in `src/config/api.ts`:
 
 ---
 
-## 6. Deterministic Agriculture Rule Engine & Prototype Thresholds (Phase 3)
+## 7. Deterministic Agriculture Rule Engine & Prototype Thresholds (Phase 3)
 
 | Parameter | Range | Status | Severity | Agronomic Context |
 |---|---|---|---|---|
@@ -167,7 +185,7 @@ Mobile endpoint configurations are centralized in `src/config/api.ts`:
 
 ---
 
-## 7. ESP32 Hardware Pin Mapping (Phase 2)
+## 8. ESP32 Hardware Pin Mapping (Phase 2)
 
 ```cpp
 #define DHT_PIN 4            // Digital Data Pin (DHT11 Temperature & Humidity)
@@ -180,9 +198,9 @@ Mobile endpoint configurations are centralized in `src/config/api.ts`:
 
 ---
 
-## 8. Verification & Test Suites
+## 9. Verification & Test Suites
 
-Run the complete 6-suite verification suite:
+Run the complete 7-suite verification suite:
 ```bash
 # 1. TypeScript Static Type Check
 npx tsc --noEmit
@@ -204,11 +222,14 @@ npx tsx src/tests/fertilizer_calculator_test.ts
 
 # 7. Phase 5 AI Assistant Validation, Matcher & Persistence Test
 npx tsx src/tests/ai_chat_test.ts
+
+# 8. Phase 6 Nearby OpenStreetMap Services & Distance Test
+npx tsx src/tests/nearby_test.ts
 ```
 
 ---
 
-## 9. Security & AI Advisory Scope
+## 10. Security & AI Advisory Scope
 
 * **API Keys:** No API keys are stored in client code, bundles, or version control.
 * **Sanitization:** Backend validates message length (max 4000 chars), sanitizes numeric telemetry values, and truncates historical messages to 15 entries.

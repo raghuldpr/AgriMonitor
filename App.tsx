@@ -4,9 +4,10 @@ import { DashboardScreen } from './src/screens/Dashboard/DashboardScreen';
 import { AlertsScreen } from './src/screens/Alerts/AlertsScreen';
 import { FertilizerScreen } from './src/screens/Fertilizer/FertilizerScreen';
 import { AgricultureChatScreen } from './src/screens/Chat/AgricultureChatScreen';
+import { NearbyScreen } from './src/screens/Nearby/NearbyScreen';
 import { BleTestScreen } from './src/screens/BleTestScreen';
 
-type Tab = 'dashboard' | 'alerts' | 'fertilizer' | 'assistant' | 'ble_test';
+type Tab = 'dashboard' | 'alerts' | 'fertilizer' | 'assistant' | 'nearby' | 'ble_test';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
@@ -21,6 +22,8 @@ export default function App() {
         return <FertilizerScreen />;
       case 'assistant':
         return <AgricultureChatScreen />;
+      case 'nearby':
+        return <NearbyScreen />;
       case 'ble_test':
         return <BleTestScreen />;
       default:
@@ -35,7 +38,7 @@ export default function App() {
       {/* Screen Body */}
       <View style={styles.body}>{renderScreen()}</View>
 
-      {/* Phase 5 Bottom Navigation Bar */}
+      {/* Phase 6 Bottom Navigation Bar */}
       <View style={styles.tabBar}>
         <TouchableOpacity
           style={[styles.tabItem, activeTab === 'dashboard' && styles.tabItemActive]}
@@ -74,11 +77,20 @@ export default function App() {
         </TouchableOpacity>
 
         <TouchableOpacity
+          style={[styles.tabItem, activeTab === 'nearby' && styles.tabItemActive]}
+          onPress={() => setActiveTab('nearby')}
+        >
+          <Text style={[styles.tabLabel, activeTab === 'nearby' ? styles.tabLabelActive : styles.tabLabelInactive]}>
+            📍 Nearby
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
           style={[styles.tabItem, activeTab === 'ble_test' && styles.tabItemActive]}
           onPress={() => setActiveTab('ble_test')}
         >
           <Text style={[styles.tabLabel, activeTab === 'ble_test' ? styles.tabLabelActive : styles.tabLabelInactive]}>
-            🔧 BLE Test
+            🔧 BLE
           </Text>
         </TouchableOpacity>
       </View>
@@ -99,22 +111,22 @@ const styles = StyleSheet.create({
     backgroundColor: '#1E293B',
     borderTopWidth: 1,
     borderTopColor: '#334155',
-    paddingVertical: 8,
-    paddingHorizontal: 4,
-    paddingBottom: 12,
+    paddingVertical: 6,
+    paddingHorizontal: 2,
+    paddingBottom: 10,
   },
   tabItem: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 6,
-    borderRadius: 8,
+    paddingVertical: 5,
+    borderRadius: 6,
   },
   tabItemActive: {
     backgroundColor: '#0F172A',
   },
   tabLabel: {
-    fontSize: 10,
+    fontSize: 9.5,
     fontWeight: '700',
   },
   tabLabelActive: {
