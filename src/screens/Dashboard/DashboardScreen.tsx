@@ -9,6 +9,7 @@ import {
   Modal,
 } from 'react-native';
 import { useTelemetry } from '../../hooks/useTelemetry';
+import { useAlerts } from '../../hooks/useAlerts';
 
 export const DashboardScreen: React.FC = () => {
   const {
@@ -26,6 +27,7 @@ export const DashboardScreen: React.FC = () => {
     stopScan,
   } = useTelemetry();
 
+  const { evaluation, activeAlerts } = useAlerts();
   const [isScannerModalVisible, setIsScannerModalVisible] = useState(false);
 
   const getStatusBadge = () => {
@@ -76,17 +78,33 @@ export const DashboardScreen: React.FC = () => {
   };
 
   const getSoilMoistureBadge = (val: number) => {
+    if (val < 20) return { label: 'VERY LOW / DROUGHT', color: '#EF4444', bg: 'rgba(239, 68, 68, 0.15)' };
     if (val < 30) return { label: 'LOW / DRY', color: '#F59E0B', bg: 'rgba(245, 158, 11, 0.15)' };
-    if (val <= 70) return { label: 'OPTIMAL', color: '#10B981', bg: 'rgba(16, 185, 129, 0.15)' };
+    if (val <= 70) return { label: 'OPTIMAL (40–70%)', color: '#10B981', bg: 'rgba(16, 185, 129, 0.15)' };
     if (val <= 85) return { label: 'HIGH MOISTURE', color: '#38BDF8', bg: 'rgba(56, 189, 248, 0.15)' };
     return { label: 'SATURATED / WET', color: '#EC4899', bg: 'rgba(236, 72, 153, 0.15)' };
   };
 
   const getTdsBadge = (val: number) => {
     if (val < 200) return { label: 'LOW MINERALS', color: '#38BDF8' };
-    if (val <= 800) return { label: 'BALANCED CONDUCTIVITY', color: '#10B981' };
-    if (val <= 1500) return { label: 'ELEVATED SALTS', color: '#F59E0B' };
-    return { label: 'HIGH SALINITY', color: '#EF4444' };
+    if (val <= 1200) return { label: 'BALANCED SOLIDS', color: '#10B981' };
+    return { label: 'HIGH DISSOLVED SOLIDS', color: '#F59E0B' };
+  };
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'NORMAL':
+        return '#10B981';
+      case 'HIGH':
+      case 'LOW':
+        return '#F59E0B';
+      case 'VERY_HIGH':
+      case 'VERY_LOW':
+      case 'SATURATED':
+        return '#EF4444';
+      default:
+        return '#94A3B8';
+    }
   };
 
   const handleOpenScanner = async () => {
@@ -108,7 +126,7 @@ export const DashboardScreen: React.FC = () => {
       <View style={styles.header}>
         <View>
           <Text style={styles.appTitle}>AgriMonitor</Text>
-          <Text style={styles.subTitle}>Live ESP32 Telemetry Hub</Text>
+          <Text style={styles.subTitle}>Live ESP32 Telemetry & Crop Insights</Text>
         </View>
 
         <TouchableOpacity
@@ -165,104 +183,177 @@ export const DashboardScreen: React.FC = () => {
           )}
         </View>
       ) : (
-        <View style={styles.grid}>
-          {/* 1. SOIL MOISTURE (Primary Agriculture Metric) */}
-          <View style={[styles.card, styles.cardFull]}>
-            <View style={styles.cardHeader}>
-              <Text style={styles.cardTitle}>SOIL MOISTURE</Text>
-              <View
-                style={[
-                  styles.paramBadge,
-                  { backgroundColor: getSoilMoistureBadge(telemetry.soilMoisture).bg },
-                ]}
-              >
-                <Text
+        <>
+          <View style={styles.grid}>
+            {/* 1. SOIL MOISTURE (Primary Agriculture Metric) */}
+            <View style={[styles.card, styles.cardFull]}>
+              <View style={styles.cardHeader}>
+                <Text style={styles.cardTitle}>SOIL MOISTURE</Text>
+                <View
                   style={[
-                    styles.paramBadgeText,
-                    { color: getSoilMoistureBadge(telemetry.soilMoisture).color },
+                    styles.paramBadge,
+                    { backgroundColor: getSoilMoistureBadge(telemetry.soilMoisture).bg },
                   ]}
                 >
-                  {getSoilMoistureBadge(telemetry.soilMoisture).label}
+                  <Text
+                    style={[
+                      styles.paramBadgeText,
+                      { color: getSoilMoistureBadge(telemetry.soilMoisture).color },
+                    ]}
+                  >
+                    {getSoilMoistureBadge(telemetry.soilMoisture).label}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.bigMetricRow}>
+                <Text style={[styles.bigMetricValue, { color: '#10B981' }]}>
+                  {telemetry.soilMoisture}
+                  <Text style={styles.bigMetricUnit}>%</Text>
                 </Text>
+                <Text style={styles.sensorStatusText}>
+                  {connectionStatus === 'CONNECTED' ? 'Live Reading' : 'Last Valid Reading'}
+                </Text>
+              </View>
+
+              {/* Visual Progress Bar */}
+              <View style={styles.progressBarTrack}>
+                <View
+                  style={[
+                    styles.progressBarFill,
+                    {
+                      width: `${Math.min(100, Math.max(0, telemetry.soilMoisture))}%`,
+                      backgroundColor: getSoilMoistureBadge(telemetry.soilMoisture).color,
+                    },
+                  ]}
+                />
+              </View>
+              <View style={styles.progressLabels}>
+                <Text style={styles.progressLabel}>0% (Dry)</Text>
+                <Text style={styles.progressLabel}>Optimal (30–70%)</Text>
+                <Text style={styles.progressLabel}>100% (Wet)</Text>
               </View>
             </View>
 
-            <View style={styles.bigMetricRow}>
-              <Text style={[styles.bigMetricValue, { color: '#10B981' }]}>
-                {telemetry.soilMoisture}
-                <Text style={styles.bigMetricUnit}>%</Text>
+            {/* 2. TEMPERATURE */}
+            <View style={styles.cardHalf}>
+              <View style={styles.cardHeader}>
+                <Text style={styles.cardTitle}>TEMPERATURE</Text>
+              </View>
+              <Text style={[styles.metricValue, { color: '#F97316' }]}>
+                {telemetry.temperature}
+                <Text style={styles.metricUnit}> °C</Text>
               </Text>
-              <Text style={styles.sensorStatusText}>
-                {connectionStatus === 'CONNECTED' ? 'Live Reading' : 'Last Valid Reading'}
-              </Text>
+              <Text style={styles.metricSub}>Ambient Air (DHT11)</Text>
             </View>
 
-            {/* Visual Progress Bar */}
-            <View style={styles.progressBarTrack}>
-              <View
-                style={[
-                  styles.progressBarFill,
-                  {
-                    width: `${Math.min(100, Math.max(0, telemetry.soilMoisture))}%`,
-                    backgroundColor: getSoilMoistureBadge(telemetry.soilMoisture).color,
-                  },
-                ]}
-              />
+            {/* 3. HUMIDITY */}
+            <View style={styles.cardHalf}>
+              <View style={styles.cardHeader}>
+                <Text style={styles.cardTitle}>HUMIDITY</Text>
+              </View>
+              <Text style={[styles.metricValue, { color: '#38BDF8' }]}>
+                {telemetry.humidity}
+                <Text style={styles.metricUnit}> %</Text>
+              </Text>
+              <Text style={styles.metricSub}>Relative Air Humidity</Text>
             </View>
-            <View style={styles.progressLabels}>
-              <Text style={styles.progressLabel}>0% (Dry)</Text>
-              <Text style={styles.progressLabel}>Optimal (40–70%)</Text>
-              <Text style={styles.progressLabel}>100% (Wet)</Text>
+
+            {/* 4. TDS (Mineral Conductivity) */}
+            <View style={[styles.card, styles.cardFull]}>
+              <View style={styles.cardHeader}>
+                <Text style={styles.cardTitle}>TDS (DISSOLVED SOLIDS)</Text>
+                <Text style={[styles.paramBadgeText, { color: getTdsBadge(telemetry.tds).color }]}>
+                  {getTdsBadge(telemetry.tds).label}
+                </Text>
+              </View>
+              <View style={styles.bigMetricRow}>
+                <Text style={[styles.bigMetricValue, { color: '#A855F7' }]}>
+                  {telemetry.tds}
+                  <Text style={styles.bigMetricUnit}> ppm</Text>
+                </Text>
+                <Text style={styles.metricSub}>Solution Mineral Index</Text>
+              </View>
+              <Text style={styles.tdsNote}>
+                * TDS measures total dissolved mineral conductivity. Atmospheric temp compensation is used.
+              </Text>
             </View>
           </View>
 
-          {/* 2. TEMPERATURE */}
-          <View style={styles.cardHalf}>
-            <View style={styles.cardHeader}>
-              <Text style={styles.cardTitle}>TEMPERATURE</Text>
-            </View>
-            <Text style={[styles.metricValue, { color: '#F97316' }]}>
-              {telemetry.temperature}
-              <Text style={styles.metricUnit}> °C</Text>
-            </Text>
-            <Text style={styles.metricSub}>Ambient Air (DHT11)</Text>
-          </View>
+          {/* Current Conditions Summary Table */}
+          {evaluation && (
+            <View style={styles.conditionsCard}>
+              <Text style={styles.sectionHeading}>CURRENT CONDITIONS SUMMARY</Text>
+              <View style={styles.conditionsList}>
+                <View style={styles.conditionRow}>
+                  <Text style={styles.condIconLabel}>🌡 Temperature</Text>
+                  <Text style={[styles.condStatus, { color: getStatusColor(evaluation.temperature.status) }]}>
+                    {evaluation.temperature.status}
+                  </Text>
+                </View>
 
-          {/* 3. HUMIDITY */}
-          <View style={styles.cardHalf}>
-            <View style={styles.cardHeader}>
-              <Text style={styles.cardTitle}>HUMIDITY</Text>
-            </View>
-            <Text style={[styles.metricValue, { color: '#38BDF8' }]}>
-              {telemetry.humidity}
-              <Text style={styles.metricUnit}> %</Text>
-            </Text>
-            <Text style={styles.metricSub}>Relative Air Humidity</Text>
-          </View>
+                <View style={styles.conditionRow}>
+                  <Text style={styles.condIconLabel}>💧 Soil Moisture</Text>
+                  <Text style={[styles.condStatus, { color: getStatusColor(evaluation.soilMoisture.status) }]}>
+                    {evaluation.soilMoisture.status}
+                  </Text>
+                </View>
 
-          {/* 4. TDS (Mineral Conductivity) */}
-          <View style={[styles.card, styles.cardFull]}>
-            <View style={styles.cardHeader}>
-              <Text style={styles.cardTitle}>TDS (DISSOLVED SOLIDS)</Text>
-              <Text style={[styles.paramBadgeText, { color: getTdsBadge(telemetry.tds).color }]}>
-                {getTdsBadge(telemetry.tds).label}
-              </Text>
+                <View style={styles.conditionRow}>
+                  <Text style={styles.condIconLabel}>💦 TDS (Solids)</Text>
+                  <Text style={[styles.condStatus, { color: getStatusColor(evaluation.tds.status) }]}>
+                    {evaluation.tds.status}
+                  </Text>
+                </View>
+
+                <View style={styles.conditionRow}>
+                  <Text style={styles.condIconLabel}>☁ Relative Humidity</Text>
+                  <Text style={[styles.condStatus, { color: getStatusColor(evaluation.humidity.status) }]}>
+                    {evaluation.humidity.status}
+                  </Text>
+                </View>
+              </View>
             </View>
-            <View style={styles.bigMetricRow}>
-              <Text style={[styles.bigMetricValue, { color: '#A855F7' }]}>
-                {telemetry.tds}
-                <Text style={styles.bigMetricUnit}> ppm</Text>
-              </Text>
-              <Text style={styles.metricSub}>Solution Mineral Index</Text>
+          )}
+
+          {/* Active Alert Banner */}
+          {activeAlerts.length > 0 && (
+            <View style={styles.alertBannerCard}>
+              <View style={styles.alertBannerHeader}>
+                <Text style={styles.alertBannerTitle}>⚠ Active Agricultural Alert</Text>
+                <Text style={styles.alertCountBadge}>{activeAlerts.length} Active</Text>
+              </View>
+              {activeAlerts.map((alt) => (
+                <View key={alt.id} style={styles.alertItem}>
+                  <Text style={styles.alertItemParam}>
+                    {alt.parameter === 'soilMoisture' ? 'Soil Moisture' : alt.parameter.toUpperCase()}
+                  </Text>
+                  <Text style={styles.alertItemMsg}>{alt.message}</Text>
+                </View>
+              ))}
             </View>
-            <Text style={styles.tdsNote}>
-              * TDS measures total dissolved mineral ions and conductivity. Note: Atmospheric temp compensation is used.
-            </Text>
-          </View>
-        </View>
+          )}
+
+          {/* Agronomic Insights Card */}
+          {evaluation && evaluation.insights.length > 0 && (
+            <View style={styles.insightsCard}>
+              <View style={styles.insightsHeader}>
+                <Text style={styles.insightsIcon}>🌱</Text>
+                <Text style={styles.insightsTitle}>Agronomic Insights</Text>
+              </View>
+              {evaluation.insights.slice(0, 2).map((ins) => (
+                <View key={ins.id} style={styles.insightItem}>
+                  <Text style={styles.insightTitle}>{ins.title}</Text>
+                  <Text style={styles.insightMsg}>{ins.message}</Text>
+                  <Text style={styles.insightRec}>💡 {ins.recommendation}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+        </>
       )}
 
-      {/* Device & Hardware Section */}
+      {/* Hardware Node Card */}
       <View style={styles.hwSection}>
         <Text style={styles.hwSectionTitle}>CONNECTED HARDWARE NODE</Text>
         <View style={styles.hwCard}>
@@ -580,8 +671,129 @@ const styles = StyleSheet.create({
     marginTop: 6,
     lineHeight: 14,
   },
+  sectionHeading: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#64748B',
+    letterSpacing: 0.5,
+    marginBottom: 8,
+  },
+  conditionsCard: {
+    backgroundColor: '#1E293B',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  conditionsList: {
+    gap: 8,
+  },
+  conditionRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: '#0F172A',
+  },
+  condIconLabel: {
+    fontSize: 13,
+    color: '#F8FAFC',
+    fontWeight: '600',
+  },
+  condStatus: {
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  alertBannerCard: {
+    backgroundColor: '#1E293B',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 14,
+    borderWidth: 1.5,
+    borderColor: '#F59E0B',
+  },
+  alertBannerHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  alertBannerTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#F59E0B',
+  },
+  alertCountBadge: {
+    backgroundColor: 'rgba(245, 158, 11, 0.2)',
+    color: '#F59E0B',
+    fontSize: 10,
+    fontWeight: '700',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  alertItem: {
+    marginBottom: 6,
+  },
+  alertItemParam: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#E2E8F0',
+  },
+  alertItemMsg: {
+    fontSize: 12,
+    color: '#CBD5E1',
+    lineHeight: 16,
+  },
+  insightsCard: {
+    backgroundColor: '#1E293B',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.4)',
+  },
+  insightsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 8,
+  },
+  insightsIcon: {
+    fontSize: 16,
+  },
+  insightsTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#10B981',
+  },
+  insightItem: {
+    backgroundColor: '#0F172A',
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 8,
+  },
+  insightTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#F8FAFC',
+    marginBottom: 2,
+  },
+  insightMsg: {
+    fontSize: 11,
+    color: '#94A3B8',
+    marginBottom: 4,
+  },
+  insightRec: {
+    fontSize: 11,
+    color: '#38BDF8',
+    lineHeight: 15,
+  },
   hwSection: {
-    marginTop: 8,
+    marginTop: 4,
     marginBottom: 16,
   },
   hwSectionTitle: {

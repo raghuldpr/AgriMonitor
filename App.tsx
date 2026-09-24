@@ -1,28 +1,51 @@
 import React, { useState } from 'react';
 import { SafeAreaView, View, Text, TouchableOpacity, StyleSheet, StatusBar } from 'react-native';
 import { DashboardScreen } from './src/screens/Dashboard/DashboardScreen';
+import { AlertsScreen } from './src/screens/Alerts/AlertsScreen';
 import { BleTestScreen } from './src/screens/BleTestScreen';
 
+type Tab = 'dashboard' | 'alerts' | 'ble_test';
+
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'ble_test'>('dashboard');
+  const [activeTab, setActiveTab] = useState<Tab>('dashboard');
+
+  const renderScreen = () => {
+    switch (activeTab) {
+      case 'dashboard':
+        return <DashboardScreen />;
+      case 'alerts':
+        return <AlertsScreen />;
+      case 'ble_test':
+        return <BleTestScreen />;
+      default:
+        return <DashboardScreen />;
+    }
+  };
 
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#0B1120" />
 
       {/* Screen Body */}
-      <View style={styles.body}>
-        {activeTab === 'dashboard' ? <DashboardScreen /> : <BleTestScreen />}
-      </View>
+      <View style={styles.body}>{renderScreen()}</View>
 
-      {/* Phase 2 Bottom Tab Navigation */}
+      {/* Phase 3 Bottom Navigation Bar */}
       <View style={styles.tabBar}>
         <TouchableOpacity
           style={[styles.tabItem, activeTab === 'dashboard' && styles.tabItemActive]}
           onPress={() => setActiveTab('dashboard')}
         >
           <Text style={[styles.tabLabel, activeTab === 'dashboard' ? styles.tabLabelActive : styles.tabLabelInactive]}>
-            🌾 Live Dashboard
+            🌾 Dashboard
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.tabItem, activeTab === 'alerts' && styles.tabItemActive]}
+          onPress={() => setActiveTab('alerts')}
+        >
+          <Text style={[styles.tabLabel, activeTab === 'alerts' ? styles.tabLabelActive : styles.tabLabelInactive]}>
+            ⚠ Alerts & Logs
           </Text>
         </TouchableOpacity>
 
@@ -31,7 +54,7 @@ export default function App() {
           onPress={() => setActiveTab('ble_test')}
         >
           <Text style={[styles.tabLabel, activeTab === 'ble_test' ? styles.tabLabelActive : styles.tabLabelInactive]}>
-            🔧 BLE / Pipeline Test
+            🔧 BLE Test
           </Text>
         </TouchableOpacity>
       </View>

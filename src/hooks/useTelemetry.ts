@@ -9,6 +9,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { BleManager } from '../services/ble/BleManager';
+import { AlertManager } from '../services/alerts/AlertManager';
 import { StorageService } from '../services/storage/storageService';
 import {
   AgricultureTelemetry,
@@ -55,6 +56,9 @@ export function useTelemetry(): UseTelemetryReturn {
       setTelemetry(newTelemetry);
       lastTimestampRef.current = newTelemetry.timestamp;
       setDeviceStatus(ble.getDeviceStatus());
+
+      // Process through Agriculture Rule Engine & Alert Manager
+      AlertManager.getInstance().processTelemetry(newTelemetry);
 
       // Persist latest telemetry asynchronously
       StorageService.appendTelemetry(newTelemetry).catch(console.warn);

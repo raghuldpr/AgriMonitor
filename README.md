@@ -4,100 +4,129 @@
 
 ---
 
-## 1. System Architecture & Live Telemetry Pipeline (Phase 2)
+## 1. System Pipeline & Phase 3 Architecture
 
 ```text
-[ Hardware Sensors ]
-  ├── DHT11 Sensor (GPIO 4) ──────────► Temperature (°C) + Humidity (%)
-  ├── Analog Soil Probe (GPIO 34) ────► Calibrated Soil Moisture (%)
-  └── Analog TDS Sensor (GPIO 35) ────► Temperature-Compensated TDS (ppm)
-                    │
-                    ▼
-          [ ESP32 Microcontroller ]
-                    │ (BLE GATT Notifications - 2000ms Interval)
-                    ▼
-          [ AgriMonitor BLE Service ]
-                    │
-                    ▼
-         [ SensorParser Validator ] ──► (Strict Bounds Checking)
-                    │
-                    ▼
-        [ useTelemetry Reactive Hook ] ──► (AsyncStorage Persistence Skeleton)
-                    │
-                    ▼
-        [ Live Agriculture Dashboard ]
+[ Hardware Sensors: DHT11 + Soil Moisture + TDS ]
+                       │
+                       ▼ (BLE Notifications every 2000ms)
+            [ Android BLE Service ]
+                       │
+                       ▼
+             [ SensorParser.ts ] ──► (Strict Technical Bounds Validation)
+                       │
+                       ▼
+              [ useTelemetry ] ──► (State & Persistence)
+                       │
+                       ▼
+       [ Agriculture Rule Engine (Deterministic) ]
+                       │
+          ┌────────────┴────────────┐
+          ▼                         ▼
+  [ AlertManager ]         [ Insights Generator ]
+  (Deduplication &          (Actionable Farming
+   Recovery Events)          Recommendations)
+          │                         │
+          └────────────┬────────────┘
+                       │
+                       ▼
+          [ Live Mobile Dashboard ]
+          [ Alert & Event History ]
 ```
 
 ---
 
-## 2. Hardware Specification & Pin Assignments
+## 2. Deterministic Agriculture Rule Engine & Thresholds
 
-| Sensor / Component | Type / Interface | ESP32 Pin | Purpose | Calibration & Range |
+> **IMPORTANT DISCLAIMER ON THRESHOLDS:**
+> All threshold values in AgriMonitor are **configurable prototype defaults** and **NOT universal agronomic standards**. Requirements vary depending on crop species, phenological stage, soil texture, climate zone, and irrigation system.
+
+### Configurable Default Thresholds (`DEFAULT_THRESHOLDS`):
+
+| Parameter | Range | Status | Severity | Agronomic Context |
 |---|---|---|---|---|
-| **DHT11** | Digital 1-Wire | **GPIO 4** | Ambient Air Temp & Relative Humidity | `-40°C to 80°C`, `0% to 100%` |
-| **Soil Moisture Sensor** | Analog ADC (ADC1_CH6) | **GPIO 34** | Volumetric Soil Moisture | Calibrated: Dry ADC `3200` ➔ `0%`, Wet ADC `1400` ➔ `100%` |
-| **Analog TDS Sensor** | Analog ADC (ADC1_CH7) | **GPIO 35** | Total Dissolved Solids / Mineral Conductivity | `0 to 5000 ppm` with temperature compensation formula |
-| **Status LED** | Digital Output | **GPIO 2** | Built-in BLE Link Connection Indicator | High = Connected, Low = Disconnected |
-
-> **Note on Soil Sensor Types:** Both capacitive (corrosion-resistant) and resistive sensors output analog voltage mapped inversely to moisture content. Adjust `SOIL_DRY_ADC` and `SOIL_WET_ADC` in `AgriMonitor_ESP32.ino` for your specific probe & soil composition.
-
-> **Note on TDS Limitation:** Atmospheric temperature from the DHT11 sensor is used as an approximation for solution temperature compensation. Liquid solution temperature may differ from ambient air temperature. TDS indicates total dissolved mineral salts and electrical conductivity, not individual N/P/K nutrient quantities.
+| **Soil Moisture** | `< 20%` | `VERY_LOW` | **CRITICAL** | Drought stress; immediate irrigation check needed |
+| | `20% – 30%` | `LOW` | **WARNING** | Soil moisture relatively low; check irrigation |
+| | `30% – 70%` | `NORMAL` | **INFO** | Configured optimal range for common crops |
+| | `70% – 85%` | `HIGH` | **INFO** | High moisture; adequate for high-demand stages |
+| | `> 85%` | `SATURATED` | **WARNING** | Waterlogging risk; root aeration restricted |
+| **Temperature** | `< 5.0°C` | `VERY_LOW` | **CRITICAL** | Frost hazard |
+| | `5.0°C – 15.0°C` | `LOW` | **WARNING** | Cool weather; reduced metabolic uptake |
+| | `15.0°C – 35.0°C` | `NORMAL` | **INFO** | Normal thermal range |
+| | `35.0°C – 40.0°C` | `HIGH` | **WARNING** | High temperature; monitor evapotranspiration |
+| | `> 40.0°C` | `VERY_HIGH` | **CRITICAL** | Severe heat stress risk |
+| **TDS (Solids)** | `< 200 ppm` | `LOW` | **WARNING** | Low dissolved mineral conductivity |
+| | `200 – 1200 ppm` | `NORMAL` | **INFO** | Balanced conductivity baseline |
+| | `1200 – 2000 ppm` | `HIGH` | **WARNING** | Elevated mineral salts / salinity |
+| | `> 2000 ppm` | `VERY_HIGH` | **CRITICAL** | High salinity risk; check source water |
+| **Humidity** | `< 30%` | `LOW` | **INFO** | Low humidity; high transpiration |
+| | `30% – 80%` | `NORMAL` | **INFO** | Typical canopy humidity |
+| | `> 80%` | `HIGH` | **INFO** | High humidity; monitor canopy ventilation |
 
 ---
 
-## 3. BLE GATT Specification
+## 3. Alert Deduplication & Recovery Detection
 
-* **Advertised Device Name:** `AgriMonitor-ESP32`
-* **Primary Service UUID:** `189a0001-e200-4424-9b55-d142d7c50a12`
-* **Data Characteristic UUID (READ | NOTIFY):** `189a0002-e200-4424-9b55-d142d7c50a12`
-* **Control Characteristic UUID (WRITE):** `189a0003-e200-4424-9b55-d142d7c50a12`
+Because the ESP32 streams telemetry every 2 seconds, the alert manager implements state debouncing:
 
-### Telemetry Packet Format (JSON)
-```json
-{
-  "temperature": 27.4,
-  "humidity": 62.0,
-  "soilMoisture": 48.5,
-  "tds": 540
-}
+```text
+NORMAL ➔ LOW (Moisture = 18%)
+  ↳ Alert 1 Created: "⚠ Soil moisture is very low"
+
+LOW ➔ LOW (2 seconds later)
+  ↳ Deduplicated (No duplicate alert created)
+
+LOW ➔ LOW (4 seconds later)
+  ↳ Deduplicated (No duplicate alert created)
+
+LOW ➔ NORMAL (Moisture = 46%)
+  ↳ Recovery Event Created: "✓ Soil moisture has returned to normal range"
+
+NORMAL ➔ NORMAL
+  ↳ Deduplicated (No duplicate recovery message)
+
+NORMAL ➔ LOW (Moisture = 19%)
+  ↳ Alert 2 Created: "⚠ Soil moisture is very low"
 ```
 
----
-
-## 4. Live Dashboard UI Features
-
-* **Soil Moisture Gauge Card:** Real-time level progress bar with agricultural state badges (`OPTIMAL (40–70%)`, `LOW / DRY (<30%)`, `HIGH MOISTURE`, `SATURATED`).
-* **Temperature & Humidity Cards:** Ambient climate indicators with technical unit formatting.
-* **TDS Card:** Mineral conductivity index with agronomic context.
-* **Real-Time BLE Status Ribbon:** Dynamic connection badge (`● Connected`, `○ Connecting...`, `○ Disconnected`, `⚠ Reconnecting...`) with one-tap scanner modal.
-* **Stale / Disconnected Indicators:** Distinguishes live readings from last valid cached values, avoiding deceptive `0` readings.
-* **Hardware Information:** Displays active node descriptors and GATT UUIDs.
+* **Persistence:** Alert history is stored locally in `AsyncStorage` and capped at the latest 200 entries to prevent unbounded memory growth.
 
 ---
 
-## 5. Development & Verification Commands
+## 4. Hardware Wiring & Pin Mapping
 
-### Run TypeScript Verification
+```cpp
+#define DHT_PIN 4            // Digital Data Pin (DHT11)
+#define DHT_TYPE DHT11
+
+#define SOIL_MOISTURE_PIN 34 // Analog ADC1_CH6 (Soil Moisture Sensor)
+#define TDS_SENSOR_PIN 35    // Analog ADC1_CH7 (TDS Meter Sensor)
+#define STATUS_LED_PIN 2     // Digital Output (Built-in Connection LED)
+```
+
+### Sensor Limitations & Notes:
+1. **Soil Moisture Calibration:** Raw ADC values (`SOIL_DRY_ADC = 3200`, `SOIL_WET_ADC = 1400`) should be calibrated to your specific soil composition and probe type (capacitive or resistive).
+2. **TDS Compensation:** Atmospheric temperature from DHT11 is used as an approximation for solution temperature compensation. TDS reflects overall electrical conductivity, not specific individual N, P, or K nutrient ions.
+
+---
+
+## 5. Development & Testing Commands
+
+### Run Complete Verification Test Suite
 ```bash
 npx tsc --noEmit
-```
-
-### Run Telemetry & BLE State Unit Tests
-```bash
-npx tsx src/tests/telemetry_state_test.ts
-```
-
-### Run Sensor Parser Unit Tests
-```bash
 npx tsx src/tests/sensor_parser_test.ts
+npx tsx src/tests/telemetry_state_test.ts
+npx tsx src/tests/rule_engine_test.ts
+npx tsx src/tests/alert_deduplication_test.ts
 ```
 
-### Start Express Backend
+### Start Express Backend (Health check / Future AI proxy)
 ```bash
 npm run server
 ```
 
-### Start Expo App
+### Start Expo Android Development Server
 ```bash
 npx expo start
 ```
