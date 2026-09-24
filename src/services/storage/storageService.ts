@@ -1,8 +1,9 @@
 /**
- * AgriMonitor Local Storage Service (Phase 3)
+ * AgriMonitor Local Storage Service (Phase 4)
  *
- * Offline local persistence using AsyncStorage with seamless in-memory fallback
+ * Offline local persistence using AsyncStorage with in-memory fallback
  * for CLI test suites and non-native environments:
+ * - Fertilizer calculation history (capped at 50 entries)
  * - Alert history (capped for memory efficiency)
  * - User thresholds & settings
  * - Manual pH input
@@ -12,13 +13,17 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AgricultureTelemetry } from '../../types/telemetry';
 import { AgricultureAlert } from '../alerts/alertTypes';
+import { FertilizerCalculationHistory } from '../../types/fertilizer';
 
 const STORAGE_KEYS = {
   SETTINGS_THRESHOLDS: '@agrimonitor_thresholds',
   MANUAL_PH: '@agrimonitor_manual_ph',
   RECENT_TELEMETRY: '@agrimonitor_recent_telemetry',
   ALERT_HISTORY: '@agrimonitor_alert_history',
+  FERTILIZER_HISTORY: '@agrimonitor_fertilizer_history',
 };
+
+const MAX_FERTILIZER_HISTORY = 50;
 
 // In-memory fallback map for non-native / test environments
 const memoryCache = new Map<string, string>();
@@ -100,5 +105,30 @@ export class StorageService {
    */
   public static async clearAlertHistory(): Promise<void> {
     await safeRemoveItem(STORAGE_KEYS.ALERT_HISTORY);
+  }
+
+  /**
+   * Save fertilizer calculation history (capped at 50)
+   */
+  public static async saveFertilizerHistory(
+    history: FertilizerCalculationHistory[]
+  ): Promise<void> {
+    const capped = history.slice(0, MAX_FERTILIZER_HISTORY);
+    await safeSetItem(STORAGE_KEYS.FERTILIZER_HISTORY, JSON.stringify(capped));
+  }
+
+  /**
+   * Load fertilizer calculation history
+   */
+  public static async getFertilizerHistory(): Promise<FertilizerCalculationHistory[]> {
+    const val = await safeGetItem(STORAGE_KEYS.FERTILIZER_HISTORY);
+    return val ? JSON.parse(val) : [];
+  }
+
+  /**
+   * Clear fertilizer calculation history
+   */
+  public static async clearFertilizerHistory(): Promise<void> {
+    await safeRemoveItem(STORAGE_KEYS.FERTILIZER_HISTORY);
   }
 }

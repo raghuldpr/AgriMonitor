@@ -2,9 +2,10 @@ import React, { useState } from 'react';
 import { SafeAreaView, View, Text, TouchableOpacity, StyleSheet, StatusBar } from 'react-native';
 import { DashboardScreen } from './src/screens/Dashboard/DashboardScreen';
 import { AlertsScreen } from './src/screens/Alerts/AlertsScreen';
+import { FertilizerScreen } from './src/screens/Fertilizer/FertilizerScreen';
 import { BleTestScreen } from './src/screens/BleTestScreen';
 
-type Tab = 'dashboard' | 'alerts' | 'ble_test';
+type Tab = 'dashboard' | 'alerts' | 'fertilizer' | 'ble_test';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
@@ -15,6 +16,8 @@ export default function App() {
         return <DashboardScreen />;
       case 'alerts':
         return <AlertsScreen />;
+      case 'fertilizer':
+        return <FertilizerScreen />;
       case 'ble_test':
         return <BleTestScreen />;
       default:
@@ -29,7 +32,7 @@ export default function App() {
       {/* Screen Body */}
       <View style={styles.body}>{renderScreen()}</View>
 
-      {/* Phase 3 Bottom Navigation Bar */}
+      {/* Phase 4 Bottom Navigation Bar */}
       <View style={styles.tabBar}>
         <TouchableOpacity
           style={[styles.tabItem, activeTab === 'dashboard' && styles.tabItemActive]}
@@ -45,7 +48,16 @@ export default function App() {
           onPress={() => setActiveTab('alerts')}
         >
           <Text style={[styles.tabLabel, activeTab === 'alerts' ? styles.tabLabelActive : styles.tabLabelInactive]}>
-            ⚠ Alerts & Logs
+            ⚠ Alerts
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.tabItem, activeTab === 'fertilizer' && styles.tabItemActive]}
+          onPress={() => setActiveTab('fertilizer')}
+        >
+          <Text style={[styles.tabLabel, activeTab === 'fertilizer' ? styles.tabLabelActive : styles.tabLabelInactive]}>
+            🧪 Fertilizer
           </Text>
         </TouchableOpacity>
 
@@ -76,21 +88,21 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#334155',
     paddingVertical: 10,
-    paddingHorizontal: 8,
+    paddingHorizontal: 6,
     paddingBottom: 14,
   },
   tabItem: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 8,
+    paddingVertical: 6,
     borderRadius: 8,
   },
   tabItemActive: {
     backgroundColor: '#0F172A',
   },
   tabLabel: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
   },
   tabLabelActive: {
