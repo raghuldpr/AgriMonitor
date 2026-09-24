@@ -3,9 +3,10 @@ import { SafeAreaView, View, Text, TouchableOpacity, StyleSheet, StatusBar } fro
 import { DashboardScreen } from './src/screens/Dashboard/DashboardScreen';
 import { AlertsScreen } from './src/screens/Alerts/AlertsScreen';
 import { FertilizerScreen } from './src/screens/Fertilizer/FertilizerScreen';
+import { AgricultureChatScreen } from './src/screens/Chat/AgricultureChatScreen';
 import { BleTestScreen } from './src/screens/BleTestScreen';
 
-type Tab = 'dashboard' | 'alerts' | 'fertilizer' | 'ble_test';
+type Tab = 'dashboard' | 'alerts' | 'fertilizer' | 'assistant' | 'ble_test';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
@@ -18,6 +19,8 @@ export default function App() {
         return <AlertsScreen />;
       case 'fertilizer':
         return <FertilizerScreen />;
+      case 'assistant':
+        return <AgricultureChatScreen />;
       case 'ble_test':
         return <BleTestScreen />;
       default:
@@ -32,7 +35,7 @@ export default function App() {
       {/* Screen Body */}
       <View style={styles.body}>{renderScreen()}</View>
 
-      {/* Phase 4 Bottom Navigation Bar */}
+      {/* Phase 5 Bottom Navigation Bar */}
       <View style={styles.tabBar}>
         <TouchableOpacity
           style={[styles.tabItem, activeTab === 'dashboard' && styles.tabItemActive]}
@@ -62,6 +65,15 @@ export default function App() {
         </TouchableOpacity>
 
         <TouchableOpacity
+          style={[styles.tabItem, activeTab === 'assistant' && styles.tabItemActive]}
+          onPress={() => setActiveTab('assistant')}
+        >
+          <Text style={[styles.tabLabel, activeTab === 'assistant' ? styles.tabLabelActive : styles.tabLabelInactive]}>
+            🌱 Assistant
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
           style={[styles.tabItem, activeTab === 'ble_test' && styles.tabItemActive]}
           onPress={() => setActiveTab('ble_test')}
         >
@@ -87,9 +99,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#1E293B',
     borderTopWidth: 1,
     borderTopColor: '#334155',
-    paddingVertical: 10,
-    paddingHorizontal: 6,
-    paddingBottom: 14,
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+    paddingBottom: 12,
   },
   tabItem: {
     flex: 1,
@@ -102,7 +114,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#0F172A',
   },
   tabLabel: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '700',
   },
   tabLabelActive: {

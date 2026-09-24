@@ -1,32 +1,6 @@
-import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
-import { THEME } from '../../constants/theme';
+/**
+ * AgriMonitor Assistant Screen Alias (Phase 5)
+ */
 
-export const AssistantScreen: React.FC = () => {
-  return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Agriculture AI Assistant</Text>
-      <Text style={styles.subtitle}>Powered by Groq Open-Source LLM</Text>
-    </View>
-  );
-};
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: THEME.colors.background,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: THEME.spacing.lg,
-  },
-  title: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: THEME.colors.textPrimary,
-  },
-  subtitle: {
-    fontSize: 14,
-    color: THEME.colors.textSecondary,
-    marginTop: 8,
-  },
-});
+export { AgricultureChatScreen as AssistantScreen } from '../Chat/AgricultureChatScreen';
+export { AgricultureChatScreen } from '../Chat/AgricultureChatScreen';

@@ -1,73 +1,149 @@
 # AgriMonitor
 
-**AgriMonitor** is an Android-only IoT agricultural monitoring platform connected to an **ESP32** microcontroller over Bluetooth Low Energy (BLE).
+**AgriMonitor** is an Android-only IoT agricultural monitoring platform connected to an **ESP32** microcontroller over Bluetooth Low Energy (BLE), featuring real-time sensor telemetry, a deterministic agriculture rule engine, fertilizer requirement estimation, and an AI Agriculture Assistant powered by Groq open-source LLMs via an Express backend proxy.
 
 ---
 
-## 1. System Pipeline & Phase 4 Architecture
+## 1. System Architecture (Phase 1–5)
 
 ```text
-[ Hardware Sensors: DHT11 + Soil Moisture + TDS ]
+[ ESP32 Hardware: DHT11 + Soil Moisture + TDS ]
                        │
-                       ▼ (BLE Notifications every 2000ms)
+                       ▼ (BLE GATT Notifications every 2000ms)
             [ Android BLE Service ]
                        │
                        ▼
              [ SensorParser.ts ] ──► (Strict Technical Bounds Validation)
                        │
                        ▼
-              [ useTelemetry ] ──► (State & Persistence)
+              [ useTelemetry ] ──► (State & Local Persistence)
                        │
-          ┌────────────┴───────────────────────────┐
-          ▼                                        ▼
-  [ Agriculture Rule Engine ]            [ Fertilizer Calculator ]
-  (Deduplicated Alerts & Insights)       (Deterministic Acreage & Bags)
-          │                                        │
-          └────────────────────┬───────────────────┘
-                               │
-                               ▼
-                [ Live Mobile Dashboard ]
-                [ Alert & Event History ]
-                [ Fertilizer Estimation Engine ]
+         ┌─────────────┼─────────────────────────────┐
+         ▼             ▼                             ▼
+  [ Rule Engine ]  [ Fertilizer Calculator ]  [ AI Chatbot UI ]
+  (Alerts/Insight) (Deterministic Bags)       (Offline & Online)
+         │             │                             │
+         └─────────────┼─────────────────────────────┤
+                       ▼                             │
+            [ Android Mobile UI ]                    │
+                                                     ▼ POST /api/chat
+                                        ┌───────────────────────────────┐
+                                        │ Express AI Proxy Backend      │
+                                        │  ├── Request Validation       │
+                                        │  ├── Sensor Context Injection │
+                                        │  └── Groq Provider Abstraction│
+                                        └──────────────┬────────────────┘
+                                                       │ Groq API (Backend-Only)
+                                                       ▼
+                                        [ Open-Source LLM (Llama 3.3) ]
 ```
 
 ---
 
-## 2. Fertilizer Calculator Engine & Specifications
+## 2. Phase 5: AI Agriculture Assistant & Express Proxy
 
-### A. Mathematical Formula
-1. **Total Required Fertilizer (kg):**
-   $$\text{Total Required (kg)} = \text{Land Area (acres)} \times \text{Application Rate (kg/acre)}$$
-2. **Bags Required (Rounded Up):**
-   $$\text{Bags Required} = \left\lceil \frac{\text{Total Required (kg)}}{\text{Bag Size (kg)}} \right\rceil$$
-3. **Total Purchased Fertilizer (kg):**
-   $$\text{Total Purchased (kg)} = \text{Bags Required} \times \text{Bag Size (kg)}$$
-4. **Excess / Remaining Balance (kg):**
-   $$\text{Remaining (kg)} = \text{Total Purchased (kg)} - \text{Total Required (kg)}$$
+### A. Provider Isolation & Architecture
+* **Frontend-Backend Decoupling:** The mobile app only communicates with `POST /api/chat`. It does not know which LLM provider or model is used.
+* **Secret Protection:** The `GROQ_API_KEY` remains strictly on the Express backend and is **never** bundled into the React Native app, `.env` mobile files, `app.json`, or Git.
+* **Provider Abstraction:** Implemented via `AIProvider` interface and `GroqProvider` class (`server/ai/groqProvider.ts`), managed by `AIService` (`server/ai/aiService.ts`).
+* **Configurable Model:** Model name is read dynamically from `GROQ_MODEL` (default: `llama-3.3-70b-versatile`).
 
-### B. Supported Prototype Catalogs:
-* **Crops:** Rice (Paddy), Maize (Corn), Tomato, Groundnut (Peanut), Cotton, Chilli.
-* **Fertilizer Products:**
-  * Urea (46% N, default 45 kg bag)
-  * DAP (18-46-0, default 50 kg bag)
-  * MOP (0-0-60, default 50 kg bag)
-  * NPK 10-26-26 (Complex, default 50 kg bag)
-  * NPK 20-20-20 (All-purpose, default 25 kg bag)
+### B. Sensor Context Injection
+Every AI chat request passes live sensor context and active alerts into the backend prompt builder (`server/ai/prompts.ts`):
+```text
+CURRENT AGRIMONITOR FIELD TELEMETRY:
+- Ambient Temperature: 34.2 °C
+- Relative Humidity: 58 %
+- Soil Moisture: 18 %
+- TDS (Mineral Conductivity): 620 ppm
 
-### C. Agronomic & Sensor Limitations Notice:
-> ⚠️ **IMPORTANT AGRONOMIC NOTICE:**
-> - Fertilizer rates and presets provided in AgriMonitor are **prototype reference values** and **NOT universal agronomic prescriptions**.
-> - Exact application should follow certified soil-test results, crop growth stages, product labels, and local agricultural extension guidance.
-> - **TDS & pH Context:** Live field TDS is displayed for monitoring only. TDS measures electrical conductivity across all dissolved ions and is **not** used to automatically infer specific N, P, or K fertilizer dosages.
+ACTIVE RULE ENGINE ALERTS:
+- [WARNING] soilMoisture: LOW (Value: 18) - Dry root zone detected...
 
-### D. Local History Persistence:
-* Saved under `@agrimonitor_fertilizer_history` in `AsyncStorage`.
-* Capped at the latest **50 calculations** (newest first).
-* Allows clearing history without affecting alert logs.
+AGRONOMIC CONTEXT GUIDELINES:
+- TDS reflects dissolved mineral salts / conductivity, not isolated N, P, or K levels.
+- All sensor thresholds are prototype defaults.
+```
+
+### C. Agronomic Safety & Rule Engine Independence
+* **No AI Override:** The deterministic rule engine (`agricultureRules.ts`) remains the sole authority for sensor status, thresholds, and alert generation. The AI assistant only provides explanations, educational context, and conversational guidance.
+* **TDS vs NPK Mandate:** The AI is strictly instructed that TDS measures total dissolved mineral salts/electrical conductivity and **never** directly assays isolated Nitrogen, Phosphorus, or Potassium concentrations.
+* **Fertilizer Calculator Independence:** The chatbot explains concepts and directs users to the dedicated Fertilizer Calculator rather than calculating unverified field bag requirements.
+
+### D. Offline Common-Questions Matcher
+Standard agricultural and sensor queries are answered instantly on-device without network latency or backend API calls:
+* *What is TDS? / What does TDS mean?*
+* *What is soil moisture?*
+* *What does DHT11 measure?*
+* *What does humidity mean?*
+* *What is ppm?*
+* *How does temperature affect crops?*
+
+### E. Local Storage Isolation
+* Chat history is stored locally in AsyncStorage under `@agrimonitor_chat_history`.
+* Capped at the latest **100 messages** (newest preserved).
+* Clearing chat history does **not** wipe alerts, telemetry cache, or fertilizer logs.
 
 ---
 
-## 3. Deterministic Agriculture Rule Engine & Prototype Thresholds
+## 3. Backend Setup & Configuration
+
+### A. Environment Variables
+Copy `.env.example` to `server/.env`:
+```bash
+cp .env.example server/.env
+```
+
+Configure the following variables in `server/.env`:
+```env
+GROQ_API_KEY=your_actual_groq_api_key_here
+GROQ_MODEL=llama-3.3-70b-versatile
+PORT=3001
+```
+
+### B. Running the Express Backend Server
+```bash
+npm run server
+```
+
+Verify backend health:
+```bash
+curl http://localhost:3001/health
+```
+Response:
+```json
+{
+  "status": "ok",
+  "aiConfigured": true,
+  "provider": "Groq"
+}
+```
+
+---
+
+## 4. Mobile API Configuration & LAN Setup
+
+Mobile endpoint configurations are centralized in `src/config/api.ts`:
+* **Android Emulator:** Uses `http://10.0.2.2:3001` automatically.
+* **Physical Android Device:** Set `API_CONFIG.BASE_URL` to your development computer's LAN IP (e.g., `http://192.168.1.100:3001`). Both your phone and computer must be connected to the same Wi-Fi network.
+
+---
+
+## 5. Fertilizer Calculator Specifications (Phase 4)
+
+### Mathematical Formulations:
+1. $\text{Total Required (kg)} = \text{Land Area (acres)} \times \text{Application Rate (kg/acre)}$
+2. $\text{Bags Required} = \left\lceil \frac{\text{Total Required (kg)}}{\text{Bag Size (kg)}} \right\rceil$
+3. $\text{Total Purchased (kg)} = \text{Bags Required} \times \text{Bag Size (kg)}$
+4. $\text{Remaining Balance (kg)} = \text{Total Purchased (kg)} - \text{Total Required (kg)}$
+
+### Supported Crops & Fertilizer Catalogs:
+* **Crops:** Rice (Paddy), Maize (Corn), Tomato, Groundnut (Peanut), Cotton, Chilli.
+* **Fertilizers:** Urea (46% N, 45 kg), DAP (18-46-0, 50 kg), MOP (0-0-60, 50 kg), NPK 10-26-26 (50 kg), NPK 20-20-20 (25 kg).
+
+---
+
+## 6. Deterministic Agriculture Rule Engine & Prototype Thresholds (Phase 3)
 
 | Parameter | Range | Status | Severity | Agronomic Context |
 |---|---|---|---|---|
@@ -91,37 +167,50 @@
 
 ---
 
-## 4. Hardware Pin Mapping & Firmware
+## 7. ESP32 Hardware Pin Mapping (Phase 2)
 
 ```cpp
-#define DHT_PIN 4            // Digital Data Pin (DHT11)
+#define DHT_PIN 4            // Digital Data Pin (DHT11 Temperature & Humidity)
 #define DHT_TYPE DHT11
 
-#define SOIL_MOISTURE_PIN 34 // Analog ADC1_CH6 (Soil Moisture Sensor)
-#define TDS_SENSOR_PIN 35    // Analog ADC1_CH7 (TDS Meter Sensor)
-#define STATUS_LED_PIN 2     // Digital Output (Built-in Connection LED)
+#define SOIL_MOISTURE_PIN 34 // Analog ADC1_CH6 (Capacitive Soil Moisture)
+#define TDS_SENSOR_PIN 35    // Analog ADC1_CH7 (Analog TDS Sensor)
+#define STATUS_LED_PIN 2     // Digital Output (Connection Status LED)
 ```
 
 ---
 
-## 5. Development & Testing Commands
+## 8. Verification & Test Suites
 
-### Run Complete Verification Test Suite
+Run the complete 6-suite verification suite:
 ```bash
+# 1. TypeScript Static Type Check
 npx tsc --noEmit
+
+# 2. Phase 1 Sensor Packet Parser Test
 npx tsx src/tests/sensor_parser_test.ts
+
+# 3. Phase 2 Telemetry State & Environmental Bounds Test
 npx tsx src/tests/telemetry_state_test.ts
+
+# 4. Phase 3 Rule Engine & Threshold Bounds Test
 npx tsx src/tests/rule_engine_test.ts
+
+# 5. Phase 3 Alert Deduplication & Recovery Test
 npx tsx src/tests/alert_deduplication_test.ts
+
+# 6. Phase 4 Fertilizer Mathematical Engine Test
 npx tsx src/tests/fertilizer_calculator_test.ts
+
+# 7. Phase 5 AI Assistant Validation, Matcher & Persistence Test
+npx tsx src/tests/ai_chat_test.ts
 ```
 
-### Start Express Backend
-```bash
-npm run server
-```
+---
 
-### Start Expo Android App
-```bash
-npx expo start
-```
+## 9. Security & AI Advisory Scope
+
+* **API Keys:** No API keys are stored in client code, bundles, or version control.
+* **Sanitization:** Backend validates message length (max 4000 chars), sanitizes numeric telemetry values, and truncates historical messages to 15 entries.
+* **Agronomic Advisory Limitation:**
+  > **The AI assistant provides general agricultural information and interpretation. It does not replace crop-specific agronomic advice, soil testing, product labels, or local agricultural guidance.**

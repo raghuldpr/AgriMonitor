@@ -1,8 +1,9 @@
 /**
- * AgriMonitor Local Storage Service (Phase 4)
+ * AgriMonitor Local Storage Service (Phase 5)
  *
  * Offline local persistence using AsyncStorage with in-memory fallback
  * for CLI test suites and non-native environments:
+ * - Chat message history (capped at 100 entries)
  * - Fertilizer calculation history (capped at 50 entries)
  * - Alert history (capped for memory efficiency)
  * - User thresholds & settings
@@ -14,6 +15,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AgricultureTelemetry } from '../../types/telemetry';
 import { AgricultureAlert } from '../alerts/alertTypes';
 import { FertilizerCalculationHistory } from '../../types/fertilizer';
+import { ChatMessage } from '../../types/chat';
 
 const STORAGE_KEYS = {
   SETTINGS_THRESHOLDS: '@agrimonitor_thresholds',
@@ -21,9 +23,11 @@ const STORAGE_KEYS = {
   RECENT_TELEMETRY: '@agrimonitor_recent_telemetry',
   ALERT_HISTORY: '@agrimonitor_alert_history',
   FERTILIZER_HISTORY: '@agrimonitor_fertilizer_history',
+  CHAT_HISTORY: '@agrimonitor_chat_history',
 };
 
 const MAX_FERTILIZER_HISTORY = 50;
+const MAX_CHAT_HISTORY = 100;
 
 // In-memory fallback map for non-native / test environments
 const memoryCache = new Map<string, string>();
@@ -130,5 +134,28 @@ export class StorageService {
    */
   public static async clearFertilizerHistory(): Promise<void> {
     await safeRemoveItem(STORAGE_KEYS.FERTILIZER_HISTORY);
+  }
+
+  /**
+   * Save chat history (capped at 100 messages)
+   */
+  public static async saveChatHistory(history: ChatMessage[]): Promise<void> {
+    const capped = history.slice(-MAX_CHAT_HISTORY);
+    await safeSetItem(STORAGE_KEYS.CHAT_HISTORY, JSON.stringify(capped));
+  }
+
+  /**
+   * Load chat history from storage
+   */
+  public static async getChatHistory(): Promise<ChatMessage[]> {
+    const val = await safeGetItem(STORAGE_KEYS.CHAT_HISTORY);
+    return val ? JSON.parse(val) : [];
+  }
+
+  /**
+   * Clear chat history only
+   */
+  public static async clearChatHistory(): Promise<void> {
+    await safeRemoveItem(STORAGE_KEYS.CHAT_HISTORY);
   }
 }

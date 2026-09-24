@@ -84,6 +84,30 @@ export class AlertManager {
     return this.currentEvaluation;
   }
 
+  /**
+   * Returns currently active abnormal alerts
+   */
+  public getActiveAlerts(): AgricultureAlert[] {
+    if (!this.currentEvaluation) return [];
+    const active: AgricultureAlert[] = [];
+    const params: AlertParameter[] = ['temperature', 'soilMoisture', 'tds', 'humidity'];
+    params.forEach((param) => {
+      const evalResult = this.currentEvaluation![param];
+      if (evalResult.isAbnormal && evalResult.severity !== 'INFO') {
+        active.push({
+          id: `active_${param}`,
+          parameter: param,
+          status: evalResult.status,
+          severity: evalResult.severity,
+          value: evalResult.value,
+          message: evalResult.message,
+          timestamp: Date.now(),
+        });
+      }
+    });
+    return active;
+  }
+
   public subscribe(subscriber: AlertSubscriber): () => void {
     this.subscribers.add(subscriber);
     if (this.currentEvaluation) {
