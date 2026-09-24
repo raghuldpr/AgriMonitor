@@ -4,127 +4,90 @@
 
 ---
 
-## 1. Phase 1 Architecture: BLE Telemetry Pipeline
-
-Phase 1 establishes the core hardware-to-mobile telemetry pipeline:
+## 1. System Architecture & Live Telemetry Pipeline (Phase 2)
 
 ```text
-[ ESP32 Simulated Firmware ]
-              │
-              ▼ (BLE Notifications every 2000ms)
-   [ Android BLE GATT Client ]
-              │
-              ▼
-    [ AgriMonitor BleManager ] ── (Scan / Connect / Reconnect Lifecycle)
-              │
-              ▼
-      [ SensorParser.ts ] ─────── (Strict Bounds & Finiteness Validation)
-              │
-              ▼
-   [ AgricultureTelemetry Model ]
-              │
-              ▼
-     [ BLE Test Screen UI ]
+[ Hardware Sensors ]
+  ├── DHT11 Sensor (GPIO 4) ──────────► Temperature (°C) + Humidity (%)
+  ├── Analog Soil Probe (GPIO 34) ────► Calibrated Soil Moisture (%)
+  └── Analog TDS Sensor (GPIO 35) ────► Temperature-Compensated TDS (ppm)
+                    │
+                    ▼
+          [ ESP32 Microcontroller ]
+                    │ (BLE GATT Notifications - 2000ms Interval)
+                    ▼
+          [ AgriMonitor BLE Service ]
+                    │
+                    ▼
+         [ SensorParser Validator ] ──► (Strict Bounds Checking)
+                    │
+                    ▼
+        [ useTelemetry Reactive Hook ] ──► (AsyncStorage Persistence Skeleton)
+                    │
+                    ▼
+        [ Live Agriculture Dashboard ]
 ```
 
 ---
 
-## 2. BLE Specification & UUID Decision
+## 2. Hardware Specification & Pin Assignments
 
-### UUID Strategy: Option B (Dedicated AgriMonitor Identifiers)
-To eliminate coupling and cross-talk with previous projects (e.g. Healthiva), AgriMonitor uses its own dedicated 128-bit GATT UUID namespace:
+| Sensor / Component | Type / Interface | ESP32 Pin | Purpose | Calibration & Range |
+|---|---|---|---|---|
+| **DHT11** | Digital 1-Wire | **GPIO 4** | Ambient Air Temp & Relative Humidity | `-40°C to 80°C`, `0% to 100%` |
+| **Soil Moisture Sensor** | Analog ADC (ADC1_CH6) | **GPIO 34** | Volumetric Soil Moisture | Calibrated: Dry ADC `3200` ➔ `0%`, Wet ADC `1400` ➔ `100%` |
+| **Analog TDS Sensor** | Analog ADC (ADC1_CH7) | **GPIO 35** | Total Dissolved Solids / Mineral Conductivity | `0 to 5000 ppm` with temperature compensation formula |
+| **Status LED** | Digital Output | **GPIO 2** | Built-in BLE Link Connection Indicator | High = Connected, Low = Disconnected |
+
+> **Note on Soil Sensor Types:** Both capacitive (corrosion-resistant) and resistive sensors output analog voltage mapped inversely to moisture content. Adjust `SOIL_DRY_ADC` and `SOIL_WET_ADC` in `AgriMonitor_ESP32.ino` for your specific probe & soil composition.
+
+> **Note on TDS Limitation:** Atmospheric temperature from the DHT11 sensor is used as an approximation for solution temperature compensation. Liquid solution temperature may differ from ambient air temperature. TDS indicates total dissolved mineral salts and electrical conductivity, not individual N/P/K nutrient quantities.
+
+---
+
+## 3. BLE GATT Specification
 
 * **Advertised Device Name:** `AgriMonitor-ESP32`
 * **Primary Service UUID:** `189a0001-e200-4424-9b55-d142d7c50a12`
 * **Data Characteristic UUID (READ | NOTIFY):** `189a0002-e200-4424-9b55-d142d7c50a12`
 * **Control Characteristic UUID (WRITE):** `189a0003-e200-4424-9b55-d142d7c50a12`
 
----
-
-## 3. BLE Packet Format & Technical Bounds
-
-Incoming BLE packets are JSON strings structured as follows:
-
+### Telemetry Packet Format (JSON)
 ```json
 {
-  "temperature": 28.5,
-  "humidity": 65,
-  "soilMoisture": 45,
-  "tds": 580
+  "temperature": 27.4,
+  "humidity": 62.0,
+  "soilMoisture": 48.5,
+  "tds": 540
 }
 ```
 
-### Sensor Validation Bounds:
-* **Temperature:** `-40.0°C` to `+80.0°C`
-* **Humidity:** `0.0%` to `100.0%`
-* **Soil Moisture:** `0.0%` to `100.0%`
-* **TDS (Total Dissolved Solids):** `0 ppm` to `5000 ppm`
+---
 
-*(Note: Soil pH is currently handled separately as a manual input in prototype mode and is not transmitted over BLE).*
+## 4. Live Dashboard UI Features
+
+* **Soil Moisture Gauge Card:** Real-time level progress bar with agricultural state badges (`OPTIMAL (40–70%)`, `LOW / DRY (<30%)`, `HIGH MOISTURE`, `SATURATED`).
+* **Temperature & Humidity Cards:** Ambient climate indicators with technical unit formatting.
+* **TDS Card:** Mineral conductivity index with agronomic context.
+* **Real-Time BLE Status Ribbon:** Dynamic connection badge (`● Connected`, `○ Connecting...`, `○ Disconnected`, `⚠ Reconnecting...`) with one-tap scanner modal.
+* **Stale / Disconnected Indicators:** Distinguishes live readings from last valid cached values, avoiding deceptive `0` readings.
+* **Hardware Information:** Displays active node descriptors and GATT UUIDs.
 
 ---
 
-## 4. Android BLE Permissions Configured
-
-In [`app.json`](file:///c:/Users/raghu/Desktop/Hardware%20Projects/AgriMonitor/app.json) and [`src/services/ble/blePermissions.ts`](file:///c:/Users/raghu/Desktop/Hardware%20Projects/AgriMonitor/src/services/ble/blePermissions.ts):
-* **Android 12+ (API 31+):**
-  * `android.permission.BLUETOOTH_SCAN`
-  * `android.permission.BLUETOOTH_CONNECT`
-  * `android.permission.ACCESS_FINE_LOCATION`
-* **Legacy Android (< API 31):**
-  * `android.permission.BLUETOOTH`
-  * `android.permission.BLUETOOTH_ADMIN`
-  * `android.permission.ACCESS_FINE_LOCATION`
-
----
-
-## 5. Directory Structure (Phase 1)
-
-```text
-AgriMonitor/
-├── src/
-│   ├── screens/
-│   │   ├── BleTestScreen.tsx        # Interactive BLE scan/connect & telemetry verification
-│   │   ├── Dashboard/               # Placeholder (Phase 2)
-│   │   ├── Assistant/               # Placeholder (Phase 3)
-│   │   ├── Nearby/                  # Placeholder (Phase 4)
-│   │   ├── Fertilizer/              # Placeholder (Phase 5)
-│   │   └── Alerts/                  # Placeholder (Phase 6)
-│   ├── services/
-│   │   ├── ble/
-│   │   │   ├── BleManager.ts        # Central BLE scan, connect, reconnect state machine
-│   │   │   ├── bleConfig.ts         # Service & characteristic UUIDs, retry policies
-│   │   │   ├── SensorParser.ts      # Strict JSON packet parser & bounds checker
-│   │   │   └── blePermissions.ts    # Android BLE permission checking & requests
-│   │   └── storage/
-│   │       └── storageService.ts    # AsyncStorage persistence skeleton
-│   ├── types/
-│   │   └── telemetry.ts             # AgricultureTelemetry & DeviceStatus contracts
-│   ├── constants/
-│   │   └── theme.ts                 # UI styling tokens
-│   └── tests/
-│       └── sensor_parser_test.ts    # Unit test suite for sensor validation
-├── server/
-│   └── server.ts                    # Express server with GET /health
-├── firmware/
-│   └── AgriMonitor_ESP32/
-│       └── AgriMonitor_ESP32.ino    # ESP32 BLE GATT Server with simulated telemetry
-├── App.tsx                          # App root rendering BLE Test Screen
-├── app.json                         # Android Expo development build configuration
-├── package.json
-└── tsconfig.json
-```
-
----
-
-## 6. Development & Testing Commands
+## 5. Development & Verification Commands
 
 ### Run TypeScript Verification
 ```bash
 npx tsc --noEmit
 ```
 
-### Run Parser Verification Tests
+### Run Telemetry & BLE State Unit Tests
+```bash
+npx tsx src/tests/telemetry_state_test.ts
+```
+
+### Run Sensor Parser Unit Tests
 ```bash
 npx tsx src/tests/sensor_parser_test.ts
 ```

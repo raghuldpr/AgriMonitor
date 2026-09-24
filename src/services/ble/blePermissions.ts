@@ -1,12 +1,10 @@
 /**
- * AgriMonitor BLE Permissions Service (Phase 1)
+ * AgriMonitor BLE Permissions Service (Phase 1 & 2)
  *
  * Checks and requests necessary Android Bluetooth Low Energy permissions:
  * - Android 12+ (API 31+): BLUETOOTH_SCAN, BLUETOOTH_CONNECT, ACCESS_FINE_LOCATION
  * - Android < 12: ACCESS_FINE_LOCATION
  */
-
-import { PermissionsAndroid, Platform } from 'react-native';
 
 export interface PermissionResult {
   granted: boolean;
@@ -14,14 +12,24 @@ export interface PermissionResult {
 }
 
 export class BlePermissionsService {
+  private static getReactNative() {
+    try {
+      return require('react-native');
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Check if BLE permissions are currently granted without prompting
    */
   public static async checkPermissions(): Promise<boolean> {
-    if (Platform.OS !== 'android') {
+    const rn = BlePermissionsService.getReactNative();
+    if (!rn || !rn.Platform || rn.Platform.OS !== 'android') {
       return true;
     }
 
+    const { PermissionsAndroid, Platform } = rn;
     const apiLevel = Platform.Version;
 
     try {
@@ -43,10 +51,12 @@ export class BlePermissionsService {
    * Request required BLE permissions from the user
    */
   public static async requestPermissions(): Promise<PermissionResult> {
-    if (Platform.OS !== 'android') {
+    const rn = BlePermissionsService.getReactNative();
+    if (!rn || !rn.Platform || rn.Platform.OS !== 'android') {
       return { granted: true };
     }
 
+    const { PermissionsAndroid, Platform } = rn;
     const apiLevel = Platform.Version;
 
     try {
